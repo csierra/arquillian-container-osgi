@@ -22,9 +22,11 @@ import java.io.File;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.management.MBeanServer;
@@ -44,9 +46,12 @@ import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleEvent;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.launch.FrameworkFactory;
+import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.util.tracker.BundleTracker;
 import org.osgi.util.tracker.ServiceTracker;
 
@@ -308,6 +313,36 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
             Bundle bundle = syscontext.getBundle(location);
             if (bundle != null && bundle.getState() != Bundle.UNINSTALLED) {
                 uninstallBundle(bundle);
+
+                /**
+                 * According to the doc in Bundle.uninstall(), to fully uninstall a bundle, it is needed to
+                 * call FrameworkWiring.refreshBundles() in case the uninstalled bundle has any exported
+                 * packages consumed by any other bundle.
+                 *
+                 * This code is copied from DynamicImportPackageTestCase
+                 */
+                final CountDownLatch latch = new CountDownLatch(1);
+                FrameworkListener listener = new FrameworkListener() {
+                    @Override
+                    public void frameworkEvent(FrameworkEvent event) {
+                        if (event.getType() == FrameworkEvent.PACKAGES_REFRESHED) {
+                            latch.countDown();
+                        }
+                    }
+                };
+
+                FrameworkWiring fwWiring = syscontext.getBundle().adapt(FrameworkWiring.class);
+                fwWiring.refreshBundles(Collections.singleton(bundle), listener);
+
+                // Wait for the refresh to complete
+                try {
+                    if (!latch.await(10, TimeUnit.SECONDS)) {
+                        throw new BundleException("Timeout", new TimeoutException());
+                    }
+                } catch (InterruptedException ex) {
+                    // ignore
+                }
+
             }
         } catch (BundleException ex) {
             log.warn("Cannot undeploy: " + archive, ex);
