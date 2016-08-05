@@ -49,12 +49,12 @@ public class ArquillianFragmentGenerator {
 
         Properties properties = new Properties();
 
-        properties.setProperty(Constants.BUNDLE_SYMBOLICNAME, symbolicName+".fragment");
+        properties.setProperty(Constants.BUNDLE_SYMBOLICNAME, symbolicName+"-fragment");
         properties.setProperty(Constants.BUNDLE_NAME, symbolicName + " Fragment");
         properties.setProperty(Constants.BUNDLE_VERSION, "1.0.0");
         properties.setProperty(TEST_BUNDLE_SYMBOLIC_NAME, symbolicName);
         properties.setProperty(TEST_BUNDLE_VERSION, "1.0.0");
-        properties.setProperty(Constants.FRAGMENT_HOST, ArquillianBundleGenerator.BUNDLE_SYMBOLIC_NAME);
+        properties.setProperty("Fragment-Host", ArquillianBundleGenerator.BUNDLE_SYMBOLIC_NAME);
 
         ArquillianBundleArchive arquillianBundleArchive = _arquillianBundleArchiveInstance.get();
 
