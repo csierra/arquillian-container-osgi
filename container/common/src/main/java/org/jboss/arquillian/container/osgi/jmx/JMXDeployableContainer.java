@@ -60,6 +60,7 @@ import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.jboss.shrinkwrap.api.Archive;
 import org.jboss.shrinkwrap.api.exporter.ZipExporter;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.descriptor.api.Descriptor;
 import org.jboss.shrinkwrap.resolver.api.maven.Maven;
 
@@ -109,6 +110,15 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
         try {
             BundleHandle handle = installBundle(archive);
             deployedBundles.put(archive.getName(), handle);
+
+            //deploy fragment also
+            JavaArchive fragment = archive.getAsType(JavaArchive.class, "/deployment/fragment.jar");
+
+            if (fragment != null) {
+                BundleHandle handleHandle = installBundle(fragment);
+
+                deployedBundles.put(archive.getName() + "-fragment", handleHandle);
+            }
         } catch (RuntimeException rte) {
             throw rte;
         } catch (Exception ex) {
@@ -125,7 +135,13 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
 
     @Override
     public void undeploy(Archive<?> archive) throws DeploymentException {
-        BundleHandle handle = deployedBundles.remove(archive.getName());
+        undeploy(archive.getName()+"-fragment");
+        undeploy(archive.getName());
+    }
+
+    private void undeploy(String name) throws DeploymentException {
+        BundleHandle handle = deployedBundles.remove(name);
+
         if (handle != null) {
             String bundleState = null;
             try {
@@ -143,7 +159,7 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
                     long bundleId = handle.getBundleId();
                     frameworkMBean.uninstallBundle(bundleId);
                 } catch (IOException ex) {
-                    logger.error("Cannot undeploy: " + archive.getName(), ex);
+                    logger.error("Cannot undeploy: " + name, ex);
                 }
             }
         }
@@ -152,6 +168,26 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
     @Override
     public void undeploy(Descriptor desc) throws DeploymentException {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void resolveFragments(String symbolicName, String version) throws Exception {
+        BundleHandle bundle = getBundle(symbolicName, version);
+
+        long[] fragments = bundleStateMBean.getFragments(bundle.getBundleId());
+
+        frameworkMBean.resolve(fragments);
+    }
+
+    @Override
+    public void resolveBundle(String symbolicName, String version) throws Exception {
+        BundleHandle bundle = getBundle(symbolicName, version);
+
+        long[] bundles = new long[1];
+
+        bundles[0] = bundle.getBundleId();
+
+        frameworkMBean.resolve(bundles);
     }
 
     @Override
@@ -178,7 +214,21 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
         return handle;
     }
 
+    @Override
+    public void installBundle(Archive<?> archive, boolean start) throws Exception {
+        BundleHandle bundleHandle = installBundle(archive);
+
+        if (start) {
+            startBundle(bundleHandle.getSymbolicName(), bundleHandle.getVersion());
+
+            awaitBundleActive(bundleHandle.getSymbolicName(), 30, TimeUnit.SECONDS);
+        }
+    }
+
     private BundleHandle installBundle(Archive<?> archive) throws BundleException, IOException {
+        if (archive == null) {
+            throw new RuntimeException("FATAL ");
+        }
         VirtualFile virtualFile = toVirtualFile(archive);
         try {
             return installBundle(archive.getName(), virtualFile);
@@ -207,7 +257,8 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
         try {
             long bundleId = frameworkMBean.installBundleFromURL(location, serverUrl.toExternalForm());
             String symbolicName = bundleStateMBean.getSymbolicName(bundleId);
-            return new BundleHandle(bundleId, symbolicName);
+            String version = bundleStateMBean.getVersion(bundleId);
+            return new BundleHandle(bundleId, symbolicName, version);
         } finally {
             if (server != null) {
                 server.shutdown();
@@ -254,21 +305,32 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
         }
     }
 
-    protected void uninstallArquillianBundle() throws LifecycleException {
+    public void uninstallBundle(String symbolicName, String version) throws Exception {
         try {
-            BundleHandle arqBundle = getBundle("arquillian-osgi-bundle", getArquillianBundleVersion());
-            if (arqBundle != null) {
-                frameworkMBean.uninstallBundle(arqBundle.getBundleId());
-                logger.info("Bundle 'arquillian-osgi-bundle' was undeployed");
+            BundleHandle bundle = getBundle(symbolicName, version);
+            if (bundle != null) {
+                frameworkMBean.uninstallBundle(bundle.getBundleId());
+                logger.info("Bundle '" + symbolicName + " was undeployed");
             }
         } catch (Exception ex) {
-            throw new LifecycleException("Cannot uninstall arquillian-osgi-bundle", ex);
+            throw new LifecycleException("Cannot uninstall " + symbolicName, ex);
+        }
+    }
+
+    protected void uninstallArquillianBundle() throws LifecycleException {
+        try {
+            uninstallBundle("arquillian-osgi-bundle", getArquillianBundleVersion());
+        } catch (Exception ex) {
+            throw new LifecycleException("Can't install the arquillian bundle", ex);
         }
     }
 
     private VirtualFile toVirtualFile(Archive<?> archive) throws IOException {
-        ZipExporter exporter = archive.as(ZipExporter.class);
-        return AbstractVFS.toVirtualFile(archive.getName(), exporter.exportAsInputStream());
+        if (archive != null) {
+            ZipExporter exporter = archive.as(ZipExporter.class);
+            return AbstractVFS.toVirtualFile(archive.getName(), exporter.exportAsInputStream());
+        }
+        return null;
     }
 
     protected void awaitBeginningStartLevel(final Integer beginningStartLevel, long timeout, TimeUnit unit) throws IOException, TimeoutException,
@@ -289,7 +351,7 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
     @Override
     protected void awaitBootstrapCompleteService(String service) {
         try {
-            awaitBootstrapCompleteService(service, 30, TimeUnit.SECONDS);
+            awaitBootstrapCompleteService(service, 1, TimeUnit.MINUTES);
         } catch (Exception e) {
             throw new IllegalStateException("Cannot obtain bootsrap complete service: " + service, e);
         }
@@ -308,9 +370,9 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
         throw new TimeoutException("Timeout while waiting for service: " + serviceName);
     }
 
-    protected void awaitArquillianBundleActive(long timeout, TimeUnit unit) throws IOException, TimeoutException,
+    protected void awaitBundleActive(String symbolicName, long timeout, TimeUnit unit) throws IOException, TimeoutException,
         InterruptedException {
-        String symbolicName = "arquillian-osgi-bundle";
+
         List<BundleHandle> list = listBundles(symbolicName);
         if (list.size() != 1)
             throw new IllegalStateException("Cannot obtain: " + symbolicName);
@@ -408,8 +470,9 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
             CompositeData bundleType = (CompositeData) iterator.next();
             Long bundleId = (Long) bundleType.get(BundleStateMBean.IDENTIFIER);
             String auxName = (String) bundleType.get(BundleStateMBean.SYMBOLIC_NAME);
+            String version = (String) bundleType.get(BundleStateMBean.VERSION);
             if (symbolicName == null || symbolicName.equals(auxName)) {
-                bundleList.add(new BundleHandle(bundleId, symbolicName));
+                bundleList.add(new BundleHandle(bundleId, symbolicName, version));
             }
         }
         return bundleList;
@@ -433,7 +496,7 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
             String auxName = (String) bundleType.get(BundleStateMBean.SYMBOLIC_NAME);
             String auxVersion = (String) bundleType.get(BundleStateMBean.VERSION);
             if (symbolicName.equals(auxName) && version.equals(auxVersion)) {
-                return new BundleHandle(bundleId, symbolicName);
+                return new BundleHandle(bundleId, symbolicName, auxVersion);
             }
         }
         return null;
@@ -442,10 +505,12 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
     static class BundleHandle {
         private long bundleId;
         private String symbolicName;
+        private String version;
 
-        BundleHandle(long bundleId, String symbolicName) {
+        BundleHandle(long bundleId, String symbolicName, String version) {
             this.bundleId = bundleId;
             this.symbolicName = symbolicName;
+            this.version = version;
         }
 
         long getBundleId() {
@@ -456,9 +521,13 @@ public abstract class JMXDeployableContainer<T extends JMXContainerConfiguration
             return symbolicName;
         }
 
+        String getVersion() {
+            return version;
+        }
+
         @Override
         public String toString() {
-            return "[" + bundleId + "]" + symbolicName;
+            return "[" + bundleId + "]" + symbolicName + ":" + version;
         }
     }
 }

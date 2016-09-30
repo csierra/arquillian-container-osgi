@@ -22,6 +22,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -36,8 +37,14 @@ import org.jboss.arquillian.container.spi.client.container.LifecycleException;
 import org.jboss.arquillian.container.spi.client.protocol.ProtocolDescription;
 import org.jboss.arquillian.container.spi.client.protocol.metadata.JMXContext;
 import org.jboss.arquillian.container.spi.client.protocol.metadata.ProtocolMetaData;
+import org.jboss.arquillian.core.api.Instance;
+import org.jboss.arquillian.core.api.annotation.ApplicationScoped;
+import org.jboss.arquillian.core.api.annotation.Inject;
+import org.jboss.arquillian.core.spi.ServiceLoader;
+import org.jboss.arquillian.osgi.ArquillianBundleGenerator;
 import org.jboss.shrinkwrap.api.Archive;
 import org.jboss.shrinkwrap.api.exporter.ZipExporter;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.descriptor.api.Descriptor;
 import org.jboss.shrinkwrap.resolver.api.maven.Maven;
 import org.osgi.framework.Bundle;
@@ -47,6 +54,10 @@ import org.osgi.framework.BundleException;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.launch.FrameworkFactory;
+import org.osgi.framework.namespace.HostNamespace;
+import org.osgi.framework.wiring.BundleWire;
+import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.util.tracker.BundleTracker;
 import org.osgi.util.tracker.ServiceTracker;
 
@@ -83,6 +94,10 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
 
         void log(Level level, String message, Throwable th);
     }
+
+    @Inject
+    @ApplicationScoped
+    protected Instance<ServiceLoader> serviceLoaderInstance;
 
     private ContainerLogger log;
     private Framework framework;
@@ -141,11 +156,55 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
     }
 
     protected Bundle installBundle(String location, InputStream inputStream) throws BundleException {
-        return syscontext.installBundle(location, inputStream);
+        Bundle bundle = syscontext.installBundle(location, inputStream);
+
+        FrameworkWiring frameworkWiring = syscontext.getBundle().adapt(
+            FrameworkWiring.class);
+
+        ArrayList<Bundle> bundles = new ArrayList<Bundle>();
+
+        bundles.add(bundle);
+
+        frameworkWiring.resolveBundles(bundles);
+
+        return bundle;
     }
 
     protected void uninstallBundle(Bundle bundle) throws BundleException {
         bundle.uninstall();
+    }
+
+    @Override
+    public void uninstallBundle(String symbolicName, String version) throws Exception {
+        for (Bundle bundle : syscontext.getBundles()) {
+            if (bundle.getSymbolicName().equals(symbolicName) && bundle.getVersion().toString().equals(version)) {
+                bundle.uninstall();
+                return;
+            }
+        }
+        throw new IllegalStateException("Bundle '" + symbolicName + ":" + version + "' was not found");
+    }
+
+    @Override
+    public void resolveFragments(String symbolicName, String version) throws Exception {
+        Bundle bundle = getBundle(symbolicName, version);
+
+        FrameworkWiring frameworkWiring = syscontext.getBundle().adapt(FrameworkWiring.class);
+
+        frameworkWiring.resolveBundles(getFragments(bundle.getBundleContext()));
+    }
+
+    @Override
+    public void resolveBundle(String symbolicName, String version) throws Exception {
+        Bundle bundle = getBundle(symbolicName, version);
+
+        FrameworkWiring frameworkWiring = syscontext.getBundle().adapt(FrameworkWiring.class);
+
+        List<Bundle> bundles = new ArrayList<Bundle>();
+
+        bundles.add(bundle);
+
+        frameworkWiring.resolveBundles(bundles);
     }
 
     @Override
@@ -168,22 +227,28 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
             throw new LifecycleException("Cannot start embedded OSGi Framework", ex);
         }
 
-        installArquillianBundle();
+        ServiceLoader serviceLoader = serviceLoaderInstance.get();
 
-        // Wait for the arquillian-osgi-bundle to become ACTIVE
-        awaitArquillianBundleActive(syscontext, 30, TimeUnit.SECONDS);
+        ArquillianBundleGenerator arquillianBundleGenerator =
+            serviceLoader.onlyOne(ArquillianBundleGenerator.class);
+
+        try {
+            installBundle(arquillianBundleGenerator.createArquillianBundle(), true);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
         log.info("Started OSGi embedded container: " + getClass().getName());
     }
 
-    protected void awaitArquillianBundleActive(BundleContext syscontext, long timeout, TimeUnit unit) throws LifecycleException {
+    protected void awaitBundleActive(final String symbolicName, BundleContext syscontext, long timeout, TimeUnit unit) throws LifecycleException {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<Bundle> bundleRef = new AtomicReference<Bundle>();
         int states = Bundle.INSTALLED | Bundle.RESOLVED | Bundle.STARTING | Bundle.ACTIVE;
         BundleTracker<Bundle> tracker = new BundleTracker<Bundle>(syscontext, states, null) {
             @Override
             public Bundle addingBundle(Bundle bundle, BundleEvent event) {
-                if ("arquillian-osgi-bundle".equals(bundle.getSymbolicName())) {
+                if (symbolicName.equals(bundle.getSymbolicName())) {
                     bundleRef.set(bundle);
                     return bundle;
                 } else {
@@ -205,7 +270,7 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
             if (arqBundle == null || arqBundle.getState() != Bundle.ACTIVE) {
                 try {
                     if (!latch.await(timeout, unit)) {
-                        throw new LifecycleException("Framework startup timeout");
+                        throw new LifecycleException("The bundle " + symbolicName + " can't be started on time");
                     }
                 } catch (InterruptedException ex) {
                     throw new LifecycleException("Framework startup interupted", ex);
@@ -247,19 +312,28 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
         }
     }
 
-    protected void installArquillianBundle() throws LifecycleException {
-        Bundle arqBundle = getInstalledBundle("arquillian-osgi-bundle");
-        if (arqBundle == null) {
-            try {
-                // Note, the bundle does not have an ImplementationVersion, we use the one of the container.
-                String arqVersion = EmbeddedDeployableContainer.class.getPackage().getImplementationVersion();
-                if (arqVersion == null) {
-                    arqVersion = System.getProperty("arquillian.osgi.version");
-                }
-                arqBundle = installBundle("org.jboss.arquillian.osgi", "arquillian-osgi-bundle", arqVersion, true);
-            } catch (BundleException ex) {
-                throw new LifecycleException("Cannot install arquillian-osgi-bundle", ex);
+    @Override
+    public void installBundle(Archive<?> archive, boolean start) throws Exception {
+    	try {
+            ZipExporter exporter = archive.as(ZipExporter.class);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            exporter.exportTo(baos);
+
+            String location = archive.getName();
+            ByteArrayInputStream inputStream = new ByteArrayInputStream(baos.toByteArray());
+            log.info("Installing bundle: " + location);
+
+            Bundle bundle = installBundle(location, inputStream);
+
+            if (start) {
+                bundle.start();
+
+                awaitBundleActive(bundle.getSymbolicName(), syscontext, 1, TimeUnit.MINUTES);
             }
+        } catch (RuntimeException rte) {
+            throw rte;
+        } catch (Exception ex) {
+            throw new DeploymentException("Cannot deploy: " + archive, ex);
         }
     }
 
@@ -280,20 +354,16 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
     @Override
     public ProtocolMetaData deploy(final Archive<?> archive) throws DeploymentException {
         try {
-            // Export the bundle bytes
-            ZipExporter exporter = archive.as(ZipExporter.class);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            exporter.exportTo(baos);
+            installBundle(archive, false);
 
-            String location = archive.getName();
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(baos.toByteArray());
-            log.info("Installing bundle: " + location);
-            installBundle(location, inputStream);
+            //deploy fragment also
+            JavaArchive fragment = archive.getAsType(JavaArchive.class, "/deployment/fragment.jar");
 
-        } catch (RuntimeException rte) {
-            throw rte;
-        } catch (Exception ex) {
-            throw new DeploymentException("Cannot deploy: " + archive, ex);
+            if (fragment != null) {
+                installBundle(fragment, false);
+            }
+        } catch (Exception e) {
+           throw new DeploymentException("Can't deploy archive", e);
         }
 
         return new ProtocolMetaData().addContext(new JMXContext(mbeanServer));
@@ -330,6 +400,30 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
                 return aux;
         }
         return null;
+    }
+
+    private Bundle getBundle(String symbolicName, String version) {
+        for (Bundle aux : syscontext.getBundles()) {
+            if (symbolicName.equals(aux.getSymbolicName()) && version.equals(aux.getVersion().toString()))
+                return aux;
+        }
+        return null;
+    }
+
+    private List<Bundle> getFragments(BundleContext context) {
+        BundleWiring bundleWiring = context.getBundle().adapt(BundleWiring.class );
+
+        List<Bundle> fragmentBundles = new ArrayList<Bundle>();
+
+        if (bundleWiring != null) {
+            List<BundleWire> providedWires = bundleWiring.getProvidedWires(HostNamespace.HOST_NAMESPACE);
+
+            for (BundleWire providedWire : providedWires) {
+                fragmentBundles.add(providedWire.getRequirerWiring().getRevision().getBundle());
+            }
+        }
+
+        return fragmentBundles;
     }
 
     private Bundle installBundle(String groupId, String artifactId, String version, boolean startBundle) throws BundleException {
