@@ -314,7 +314,7 @@ public abstract class EmbeddedDeployableContainer<T extends EmbeddedContainerCon
 
     @Override
     public void installBundle(Archive<?> archive, boolean start) throws Exception {
-    	try {
+        try {
             ZipExporter exporter = archive.as(ZipExporter.class);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             exporter.exportTo(baos);
