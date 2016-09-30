@@ -91,8 +91,11 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
             if (!karafHomeDir.isDirectory())
                 throw new IllegalStateException("Not a valid Karaf home dir: " + karafHomeDir);
 
+            String java = System.getProperty("java.home") + File.separator + "bin" + File.separator + "java";
+            _logger.info(String.format("Using java: %s", java));
+
             List<String> cmd = new ArrayList<String>();
-            cmd.add("java");
+            cmd.add(java);
 
             // JavaVM args
             String javaArgs = config.getJavaVmArguments();
@@ -107,6 +110,7 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
             cmd.add("-Dkaraf.etc=" + karafHomeDir + "/etc");
             cmd.add("-Dkaraf.data=" + karafHomeDir + "/data");
             cmd.add("-Dkaraf.instances=" + karafHomeDir + "/instances");
+            cmd.add("-Dkaraf.restart.jvm.supported=true");
             cmd.add("-Dkaraf.startLocalConsole=false");
             cmd.add("-Dkaraf.startRemoteShell=false");
 
@@ -116,17 +120,17 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
             cmd.add("-Djava.endorsed.dirs=" + new File(karafHomeDir, "lib/endorsed"));
 
             // Classpath
-            StringBuffer classPath = new StringBuffer();
-            File karafLibDir = new File(karafHomeDir, "lib");
-            String[] libs = karafLibDir.list(new FilenameFilter() {
+            StringBuilder classPath = new StringBuilder();
+            File karafLibBootDir = new File(karafHomeDir, "lib/boot/");
+            String[] libs = karafLibBootDir.list(new FilenameFilter() {
                 @Override
                 public boolean accept(File dir, String name) {
-                    return name.startsWith("karaf");
+                    return name.endsWith(".jar");
                 }
             });
             for (String lib : libs) {
                 String separator = classPath.length() > 0 ? File.pathSeparator : "";
-                classPath.append(separator + new File(karafHomeDir, "lib/" + lib));
+                classPath.append(separator).append(new File(karafLibBootDir, lib));
             }
             cmd.add("-classpath");
             cmd.add(classPath.toString());
@@ -137,7 +141,7 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
             // Output the startup command
             StringBuffer cmdstr = new StringBuffer();
             for (String tok : cmd) {
-                cmdstr.append(tok + " ");
+                cmdstr.append(tok).append(" ");
             }
             _logger.debug("Starting Karaf with: {}", cmdstr);
 
@@ -175,12 +179,6 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
             oname = ObjectNameFactory.create("osgi.core:type=serviceState,*");
             serviceStateMBean = getMBeanProxy(mbeanServer, oname, ServiceStateMBean.class, 30, TimeUnit.SECONDS);
 
-            // Install the arquillian bundle to become active
-            installArquillianBundle();
-
-            // Await the arquillian bundle to become active
-            awaitArquillianBundleActive(30, TimeUnit.SECONDS);
-
             // Await the beginning start level
             Integer beginningStartLevel = config.getKarafBeginningStartLevel();
             if (beginningStartLevel != null)
@@ -200,6 +198,7 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
 
     @Override
     public void stop() throws LifecycleException {
+        super.stop();
         destroyKarafProcess();
     }
 
@@ -228,7 +227,7 @@ public class KarafManagedDeployableContainer<T extends KarafManagedContainerConf
                     if (writeOutput)
                         System.out.write(buf, 0, num);
                 }
-            } catch (IOException e) {
+            } catch (IOException ignored) {
             }
         }
     }

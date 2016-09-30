@@ -32,7 +32,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * KarafRemoteDeployableContainer
+ * Remote deployable container for Karaf.
+ * <p>
+ * Should also work with any remote container with an OSGi Enterprise JMX MBeans implementation
+ * (such as Apache Aries JMX) enabled.
  *
  * @author thomas.diesler@jboss.com
  * @author sbunciak@redhat.com
@@ -43,7 +46,7 @@ public class KarafRemoteDeployableContainer<T extends KarafRemoteContainerConfig
 
     //private KarafRemoteContainerConfiguration config;
 
-    static final Logger _logger = LoggerFactory.getLogger(KarafRemoteDeployableContainer.class.getPackage().getName());
+    static final Logger logger = LoggerFactory.getLogger(KarafRemoteDeployableContainer.class.getPackage().getName());
 
     @Override
     public Class<T> getConfigurationClass() {
@@ -71,7 +74,7 @@ public class KarafRemoteDeployableContainer<T extends KarafRemoteContainerConfig
             mbeanServer = getMBeanServerConnection(30, TimeUnit.SECONDS);
             mbeanServerInstance.set(mbeanServer);
         } catch (TimeoutException e) {
-            _logger.error("Error connecting to Karaf MBeanServer: ", e);
+            throw new LifecycleException("Error connecting to Karaf MBeanServer: ", e);
         }
 
         try {
@@ -87,12 +90,6 @@ public class KarafRemoteDeployableContainer<T extends KarafRemoteContainerConfig
             oname = new ObjectName("osgi.core:type=serviceState,*");
             serviceStateMBean = getMBeanProxy(mbeanServer, oname, ServiceStateMBean.class, 30, TimeUnit.SECONDS);
 
-            // Install the arquillian bundle to become active
-            installArquillianBundle();
-
-            // Await the arquillian bundle to become active
-            awaitArquillianBundleActive(30, TimeUnit.SECONDS);
-
             // Await bootsrap complete services
             awaitBootstrapCompleteServices();
 
@@ -105,7 +102,6 @@ public class KarafRemoteDeployableContainer<T extends KarafRemoteContainerConfig
 
     @Override
     public void stop() throws LifecycleException {
-        // Intentionally left blank, at the moment
-        // Any cleanup operations can be performed in this method
+        super.stop();
     }
 }

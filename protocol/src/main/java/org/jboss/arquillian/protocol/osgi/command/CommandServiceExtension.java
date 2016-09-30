@@ -14,26 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jboss.arquillian.osgi;
+package org.jboss.arquillian.protocol.osgi.command;
 
-import org.jboss.arquillian.junit.container.JUnitTestRunner;
-import org.jboss.arquillian.test.spi.TestResult;
+import org.jboss.arquillian.container.test.spi.RemoteLoadableExtension;
+import org.jboss.arquillian.container.test.spi.command.CommandService;
+import org.jboss.arquillian.protocol.jmx.JMXCommandService;
 
 /**
- * A JUnitTestRunner for OSGi
+ * CommandServiceExtension
  *
- * @author thomas.diesler@jboss.com
+ * @author <a href="mailto:cristina.gonzalez@liferay.com">Cristina González Castellano</a>
  */
-public class JUnitBundleTestRunner extends JUnitTestRunner {
+public class CommandServiceExtension implements RemoteLoadableExtension {
+
     @Override
-    public TestResult execute(Class<?> testClass, String methodName) {
-        ClassLoader ctxLoader = Thread.currentThread().getContextClassLoader();
-        try {
-            // Make sure we run in the context of the arquillian-bundle class loader
-            Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
-            return super.execute(testClass, methodName);
-        } finally {
-            Thread.currentThread().setContextClassLoader(ctxLoader);
-        }
+    public void register(ExtensionBuilder builder) {
+        builder.service(CommandService.class, JMXCommandService.class);
     }
+
 }
