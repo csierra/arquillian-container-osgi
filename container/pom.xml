@@ -25,9 +25,9 @@
 		<module>common</module>
 		<module>tests</module>
 		<module>jbosgi</module>
-		<module>felix</module>
-		<module>equinox</module>
-		<module>karaf</module>
+		<!--<module>felix</module>-->
+		<!--<module>equinox</module>-->
+		<!--<module>karaf</module>-->
 	</modules>
 
 	<!-- Dependencies -->

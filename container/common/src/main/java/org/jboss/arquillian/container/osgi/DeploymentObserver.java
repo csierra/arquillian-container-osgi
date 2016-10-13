@@ -51,16 +51,23 @@ public class DeploymentObserver {
 
     public void resetContext(@Observes BeforeClass event) throws Exception {
         _resetContext = true;
+
+        System.out.println("RESET CONTEXT");
     }
 
     public void autostartBundle(@Observes AfterDeploy event) throws Exception {
+        System.out.println("AUTOSTART BUNDLE");
+
         if (event.getDeployableContainer() instanceof CommonDeployableContainer) {
+
+            System.out.println("COMMON DEPLORABLE CONTAINER");
+
             CommonDeployableContainer<?> container = (CommonDeployableContainer<?>) event.getDeployableContainer();
 
             Manifest manifest = new Manifest(event.getDeployment().getArchive().get("/META-INF/MANIFEST.MF").getAsset().openStream());
             OSGiMetaData metadata = OSGiMetaDataBuilder.load(manifest);
 
-            if (_resetContext) {
+//            if (_resetContext) {
                 container.uninstallBundle("arquillian-osgi-bundle", "1.0.0");
                 container.installBundle(_arquillianOSGiBundle, true);
 
@@ -69,7 +76,7 @@ public class DeploymentObserver {
                 container.resolveBundle(metadata.getBundleSymbolicName(), metadata.getBundleVersion().toString());
 
                 _resetContext = false;
-            }
+//            }
 
             if (container.isAutostartBundle()) {
                 container.startBundle(metadata.getBundleSymbolicName(), metadata.getBundleVersion().toString());

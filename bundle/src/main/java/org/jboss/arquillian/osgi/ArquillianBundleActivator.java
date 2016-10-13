@@ -80,17 +80,32 @@ public class ArquillianBundleActivator implements BundleActivator {
 
             @Override
             public byte[] runTestMethod(String className, String methodName, Map<String, String> protocolProps) {
-                Class<?> testClass;
-                try {
-                    testClass = testClassLoader.loadTestClass(className);
-                } catch (ClassNotFoundException ex) {
-                    throw new IllegalStateException(ex);
-                }
-                Bundle fragmentBundle = getFragmentBundle(context);
+                Thread thread = Thread.currentThread();
 
-                BundleAssociation.setBundle(getTestBundle(syscontext, fragmentBundle.getHeaders().get("Test-Bundle-Symbolic-Name"), testClass, methodName));
-                BundleContextAssociation.setBundleContext(syscontext);
-                return super.runTestMethod(className, methodName, protocolProps);
+                ClassLoader contextClassLoader = thread.getContextClassLoader();
+
+                try {
+                    Bundle bundle = context.getBundle();
+
+                    BundleWiring bundleWiring = bundle.adapt(BundleWiring.class);
+
+                    thread.setContextClassLoader(bundleWiring.getClassLoader());
+
+                    Class<?> testClass;
+                    try {
+                        testClass = testClassLoader.loadTestClass(className);
+                    } catch (ClassNotFoundException ex) {
+                        throw new IllegalStateException(ex);
+                    }
+                    Bundle fragmentBundle = getFragmentBundle(context);
+
+                    BundleAssociation.setBundle(getTestBundle(syscontext, fragmentBundle.getHeaders().get("Test-Bundle-Symbolic-Name"), testClass, methodName));
+                    BundleContextAssociation.setBundleContext(syscontext);
+                    return super.runTestMethod(className, methodName, protocolProps);
+                }
+                finally {
+                    thread.setContextClassLoader(contextClassLoader);
+                }
             }
         };
         testRunner.registerMBean(mbeanServer);

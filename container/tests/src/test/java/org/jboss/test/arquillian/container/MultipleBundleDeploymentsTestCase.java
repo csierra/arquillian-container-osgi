@@ -27,6 +27,7 @@ import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.Asset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.osgi.framework.Bundle;
@@ -40,6 +41,7 @@ import org.osgi.framework.wiring.FrameworkWiring;
  * @since 16-Oct-2012
  */
 @RunWith(Arquillian.class)
+@Ignore
 public class MultipleBundleDeploymentsTestCase {
 
     static final String BUNDLE_A = "bundle-a";
